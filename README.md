@@ -1,1 +1,1 @@
-# neural-net-rognize-symbols
+# neural-net-recognize-symbols
