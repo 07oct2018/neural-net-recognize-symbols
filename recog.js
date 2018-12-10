@@ -1,7 +1,5 @@
-#!/usr/bin/env node
-'use strict'
+
 let fs = require('fs');
-let convnetjs = require('./convnet-min.js');
 
 function prepareData(data) {
   return data
@@ -14,10 +12,12 @@ function prepareData(data) {
       )
     ).filter( el =>
       el.length != 0
+    ).map( el => 
+    [1].concat(el)
     )
-    .map( el => 
+    /*.map( el => 
       new convnetjs.Vol(el)
-    )
+    )*/
 }
 
 let createRange = function(no) {
@@ -43,7 +43,7 @@ Array.prototype.fold = function(length) {
 }
 
 function presentDataItem(dataItem) {
-  return foldList(dataItem.w,5)
+  return foldList(dataItem.slice(1),5)
     .map( el =>
       el.join("")
     ).join("\n")
@@ -70,7 +70,7 @@ function presentData(data){
 function printUsage() {
   console.log(`
   Usage:
-  ${process.argv[1]} train trainingdata.txt training_cycles
+  ${process.argv[1]} train trainingdata.txt 
   ${process.argv[1]} recognize data.txt 
   `)
 }
@@ -83,44 +83,102 @@ function taggedMax(a) {
 
 }
 
+function presentWeights(weights) {
+  return weights
+    .map( el => 
+      el.map( el2 =>
+        el2.toString().padStart(2)
+      ).join(" ")
+    ).join("\n")
+}
+
 let class_to_symbol = ['Г','К','С','0','2']
 
+function neuronResult(neuron, dataItem) {
+  return (neuron.reduce( ( (acc, weight, no) =>
+    acc + weight * dataItem[no]
+  ),0 ) >= neuron[0]) === true ? 1 : 0;
+}
+
+function recogResultRaw(net, dataItem) {
+  return net.map(neuron => neuronResult(neuron,dataItem))
+}
+
+function recogResult(net, dataItem, label) {
+  let recogResult = recogResultRaw(net,dataItem);
+  if (recogResult.filter( el => el === 1).length===1 &&
+      recogResult.filter( el => el !== 1).length===4)
+    if (recogResult.indexOf(1) === label)
+      return recogResult.toString()
+        .concat(" - ")
+        .concat(class_to_symbol[recogResult.indexOf(1)])
+        .concat(" (Распознан верно)")
+    else 
+      return recogResult.toString()
+        .concat(" - ")
+        .concat(class_to_symbol[recogResult.indexOf(1)])
+        .concat(" (Ожидаемый ответ - ")
+        .concat(class_to_symbol[label])
+        .concat(" )")
+  else
+    return recogResult.toString()
+      .concat(" - ")
+      .concat("Образ не распознан")
+}
+
+
 function main() {
-  let net = new convnetjs.Net();
+
   switch(process.argv[2]) {
-    case 'train':
-      console.log('Обучающее множество ',process.argv[3]);
-      let rawTrainingData = fs.readFileSync(process.argv[3],'utf-8');
-      let trainingCycles = parseInt(process.argv[4]);
-      let trainingData = prepareData(rawTrainingData);
-
-      net.makeLayers([
-        {type:'input', out_sx:1, out_sy:1, out_depth:35},
-        {type:'softmax', num_classes:5}
-      ]);
-
-      let trainer = new convnetjs.Trainer(net);
-      createRange(500).map( x => 
-        createRange(trainingData.length).map( el =>
-          trainer.train(trainingData[el], el % 5) ));
-      console.log(presentData(trainingData));
-      fs.writeFileSync("network.json",JSON.stringify(net.toJSON(),null,"  "));
-      break;
-    case 'recognize':
-      let rawTestData = fs.readFileSync(process.argv[3],'utf-8');
-      let testData = prepareData(rawTestData);
-      net.fromJSON(JSON.parse(fs.readFileSync("network.json",'utf-8')));
-      testData.map( testDataItem => {
-        console.log(presentDataItem(testDataItem))
-        let recog_results = taggedMax(net.forward(testDataItem).w);
-        console.log("Символ: ",class_to_symbol[recog_results.index],"Вероятность:",recog_results.value)
-      }
+    case 'train': {
+      var netWeights = Array.from(Array(5)).map( el =>
+        Array.from(Array(36)).map( el2 =>
+          0
+        )
       )
+      const rawTrainingData = fs.readFileSync(process.argv[3],'utf-8');
+      const trainingData = prepareData(rawTrainingData)
+      console.log(presentData(trainingData))
+      //dataItem = trainingData[0];
+      let runNo = 0;
+      let trainingDone = true;
+      do {
+        trainingDone = true;
+        runNo +=1;
+        console.log("\nЦикл обучения",runNo,". Распознавание обучающего множества:");
+        trainingData.map( ( dataItem, dataIndex ) => {
+          console.log(recogResult(netWeights,dataItem,dataIndex % 5));
+          netWeights = netWeights.map( (neuron, neuronNo) => {
+            let result = neuronResult(neuron,dataItem)
+            let delta = (neuronNo === ( dataIndex % 5 ) ? 1 : 0) - result;
+            if (delta != 0) {trainingDone = false};
+            return neuron.map( (weight, weightNo) => 
+              weight + dataItem[weightNo]*delta
+            ) 
+          })
+        }) 
+        console.log("Веса после",runNo,"цикла обучения:");
+        console.log(presentWeights(netWeights))
+      } while (trainingDone == false)
+      console.log("Обучение закончено.");
+      fs.writeFileSync("network.json",JSON.stringify(netWeights),'utf-8');
       break;
-    default:
-      printUsage();
+    }
+    case 'recognize':{
+      const netWeights=JSON.parse(fs.readFileSync("network.json",'utf-8'));
+      console.log(presentWeights(netWeights))
+      const rawTrainingData = fs.readFileSync(process.argv[3],'utf-8');
+      const trainingData = prepareData(rawTrainingData)
+      trainingData.map( ( dataItem, dataIndex ) => {
+        console.log(recogResult(netWeights,dataItem,dataIndex % 5));
+      })
       break;
+    }
+    default: {
+      printUsage()
+      break;
+    }
   }
 }
 
-main();
+main()
